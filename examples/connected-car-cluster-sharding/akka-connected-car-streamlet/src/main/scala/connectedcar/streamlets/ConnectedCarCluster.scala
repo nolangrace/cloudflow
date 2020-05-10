@@ -1,17 +1,22 @@
 package connectedcar.streamlets
 
-import akka.actor.{ ActorRef, Props }
-import akka.cluster.sharding.{ ClusterSharding, ClusterShardingSettings }
+import akka.actor.typed.ActorRef
+import akka.cluster.sharding.typed.ShardingEnvelope
+import akka.cluster.sharding.typed.scaladsl.{ClusterSharding, Entity, EntityTypeKey}
 import akka.util.Timeout
-import cloudflow.akkastream.scaladsl.{ FlowWithCommittableContext, RunnableGraphStreamletLogic }
+import cloudflow.akkastream.scaladsl.RunnableGraphStreamletLogic
 import cloudflow.streamlets.StreamletShape
-import cloudflow.streamlets.avro.{ AvroInlet, AvroOutlet }
-import connectedcar.actors.ConnectedCarActor
+import cloudflow.streamlets.avro.{AvroInlet, AvroOutlet}
+import connectedcar.actors.{ConnectedCarActor, ConnectedCarERecordWrapper}
 
 import scala.concurrent.duration._
-import akka.pattern.ask
-import cloudflow.akkastream.{ AkkaStreamlet, Clustering }
-import connectedcar.data.{ ConnectedCarAgg, ConnectedCarERecord }
+
+import akka.actor.typed.scaladsl.AskPattern._
+import akka.stream.scaladsl.{Source, SourceQueueWithComplete}
+import akka.stream.{ActorAttributes, OverflowStrategy, Supervision}
+import cloudflow.akkastream.{AkkaStreamlet, Clustering}
+import connectedcar.data.{ConnectedCarAgg, ConnectedCarERecord}
+import akka.actor.typed.scaladsl.adapter._
 
 object ConnectedCarCluster extends AkkaStreamlet with Clustering {
   val in    = AvroInlet[ConnectedCarERecord]("in")
@@ -19,19 +24,39 @@ object ConnectedCarCluster extends AkkaStreamlet with Clustering {
   val shape = StreamletShape(in).withOutlets(out)
 
   override def createLogic = new RunnableGraphStreamletLogic() {
-    def runnableGraph = sourceWithCommittableContext(in).via(flow).to(committableSink(out))
 
-    val carRegion: ActorRef = ClusterSharding(context.system).start(
-      typeName = "Counter",
-      entityProps = Props[ConnectedCarActor],
-      settings = ClusterShardingSettings(context.system),
-      extractEntityId = ConnectedCarActor.extractEntityId,
-      extractShardId = ConnectedCarActor.extractShardId
-    )
+    val (queue:SourceQueueWithComplete[ConnectedCarAgg], source)= Source
+      .queue[ConnectedCarAgg](1000, OverflowStrategy.backpressure)
+      .preMaterialize()
 
     implicit val timeout: Timeout = 3.seconds
-    def flow =
-      FlowWithCommittableContext[ConnectedCarERecord]
-        .mapAsync(5)(msg ⇒ (carRegion ? msg).mapTo[ConnectedCarAgg])
+    implicit val typedScheduler = system.toTyped.scheduler
+
+    /* runnable graph that commits offset after actor acks message */
+    def runnableGraph = {
+      sourceWithCommittableContext(in)
+        .mapAsync(5) {
+          msg ⇒ (carRegion.ask[ConnectedCarAgg](ref =>
+            ShardingEnvelope(msg.carId.toString(), ConnectedCarERecordWrapper(msg, ref))))
+        }
+        .log("error logging")
+        .to(committableSink)
+        .withAttributes(ActorAttributes.supervisionStrategy(resumingDecider))
+        .run()
+
+      source
+        .log("error logging")
+        .to(plainSink(out))
+    }
+
+    val TypeKey = EntityTypeKey[ConnectedCarERecordWrapper]("Counter")
+
+    val carRegion: ActorRef[ShardingEnvelope[ConnectedCarERecordWrapper]] =
+      ClusterSharding(system.toTyped).init(Entity(TypeKey)(createBehavior = entityContext =>
+        ConnectedCarActor(entityContext.entityId)))
+
+    val resumingDecider: Supervision.Decider = {
+      case _ => Supervision.Resume
+    }
   }
 }

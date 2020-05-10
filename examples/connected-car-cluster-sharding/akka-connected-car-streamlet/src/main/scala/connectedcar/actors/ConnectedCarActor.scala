@@ -2,6 +2,7 @@ package connectedcar.actors
 
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.scaladsl.Behaviors
+
 import connectedcar.data.{ConnectedCarAgg, ConnectedCarERecord}
 
 case class ConnectedCarERecordWrapper(record: ConnectedCarERecord, sender:ActorRef[ConnectedCarAgg])

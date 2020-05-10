@@ -1,22 +1,23 @@
 package connectedcar.streamlets
 
-import akka.actor.typed.ActorRef
 import akka.cluster.sharding.typed.ShardingEnvelope
 import akka.cluster.sharding.typed.scaladsl.{ClusterSharding, Entity, EntityTypeKey}
 import akka.util.Timeout
-import cloudflow.akkastream.scaladsl.RunnableGraphStreamletLogic
-import cloudflow.streamlets.StreamletShape
-import cloudflow.streamlets.avro.{AvroInlet, AvroOutlet}
-import connectedcar.actors.{ConnectedCarActor, ConnectedCarERecordWrapper}
-
-import scala.concurrent.duration._
-
+import akka.actor.typed.ActorRef
+import akka.actor.typed.scaladsl.adapter._
 import akka.actor.typed.scaladsl.AskPattern._
 import akka.stream.scaladsl.{Source, SourceQueueWithComplete}
 import akka.stream.{ActorAttributes, OverflowStrategy, Supervision}
+
+import cloudflow.akkastream.scaladsl.RunnableGraphStreamletLogic
+import cloudflow.streamlets.StreamletShape
+import cloudflow.streamlets.avro.{AvroInlet, AvroOutlet}
 import cloudflow.akkastream.{AkkaStreamlet, Clustering}
+
+import connectedcar.actors.{ConnectedCarActor, ConnectedCarERecordWrapper}
 import connectedcar.data.{ConnectedCarAgg, ConnectedCarERecord}
-import akka.actor.typed.scaladsl.adapter._
+
+import scala.concurrent.duration._
 
 object ConnectedCarCluster extends AkkaStreamlet with Clustering {
   val in    = AvroInlet[ConnectedCarERecord]("in")
